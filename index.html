@@ -1,0 +1,93 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="manifest" href="/manifest.json"><meta name="theme-color" content="#4f8cff"><title>Học tiếng Anh qua video</title>
+<style>
+ body{font-family:sans-serif;margin:0;background:#111;color:#eee}
+ .bar{display:flex;gap:6px;padding:8px}
+ input[type=text]{flex:1;padding:10px;border-radius:8px;border:0}
+ button{padding:10px 14px;border:0;border-radius:8px;background:#4f8cff;color:#fff}
+ #p{width:100%;aspect-ratio:16/9;background:#000}
+ #list{height:calc(100vh - 340px);overflow:auto}
+ .l{padding:10px;border-bottom:1px solid #222}
+ .l.on{background:#1d2b4a}
+ .l .v{color:#9ab;font-size:14px;margin-top:4px}
+ .w{cursor:pointer}.w:active{background:#4f8cff}
+ #dict{position:fixed;bottom:0;left:0;right:0;background:#222;padding:12px;display:none}
+</style>
+<div class="bar">
+ <input type="text" id="u" placeholder="Dán link YouTube">
+ <button onclick="go()">Dịch</button>
+</div>
+<div id="p"></div>
+<div class="bar"><label><input type="checkbox" id="loop"> Lặp câu</label>
+ <span id="st" style="margin-left:auto"></span></div>
+<div id="list"></div>
+<div id="dict" onclick="this.style.display='none'"></div>
+<script src="https://www.youtube.com/iframe_api">if("serviceWorker" in navigator)navigator.serviceWorker.register("/sw.js");
+</script>
+<script>
+let player, segs = [], cur = -1, apiReady = false;
+window.onYouTubeIframeAPIReady = () => apiReady = true;
+
+async function go() {
+  const st = document.getElementById("st");
+  st.textContent = "Đang xử lý (có thể vài phút)...";
+  try {
+    const r = await fetch("/api/process?url=" + encodeURIComponent(u.value));
+    const d = await r.json();
+    if (d.error) { st.textContent = d.error; return; }
+    segs = d.segs; st.textContent = "";
+    render();
+    if (player) player.loadVideoById(d.vid);
+    else player = new YT.Player("p", {videoId: d.vid, playerVars: {playsinline: 1}});
+  } catch (e) { st.textContent = "Lỗi: " + e; }
+}
+
+function render() {
+  const list = document.getElementById("list"); list.innerHTML = "";
+  segs.forEach((s, i) => {
+    const row = document.createElement("div"); row.className = "l"; row.id = "l" + i;
+    const en = document.createElement("div");
+    s.t.split(" ").forEach(w => {
+      const sp = document.createElement("span"); sp.className = "w"; sp.textContent = w + " ";
+      sp.onclick = ev => { ev.stopPropagation(); lookup(w); };
+      en.appendChild(sp);
+    });
+    const vi = document.createElement("div"); vi.className = "v"; vi.textContent = s.v;
+    row.append(en, vi);
+    row.onclick = () => player.seekTo(s.s, true);
+    list.appendChild(row);
+  });
+}
+
+setInterval(() => {
+  if (!player || !player.getCurrentTime || !segs.length) return;
+  const t = player.getCurrentTime();
+  if (document.getElementById("loop").checked && cur >= 0 && t >= segs[cur].e) {
+    player.seekTo(segs[cur].s, true); return;
+  }
+  const i = segs.findIndex(s => t >= s.s && t < s.e);
+  if (i >= 0 && i !== cur) {
+    if (cur >= 0) document.getElementById("l" + cur).classList.remove("on");
+    cur = i;
+    const el = document.getElementById("l" + i);
+    el.classList.add("on"); el.scrollIntoView({block: "center", behavior: "smooth"});
+  }
+}, 200);
+
+async function lookup(word) {
+  word = word.replace(/[^\w']/g, "").toLowerCase();
+  if (!word) return;
+  const box = document.getElementById("dict"); box.style.display = "block";
+  box.textContent = word + " ...";
+  speechSynthesis.speak(Object.assign(new SpeechSynthesisUtterance(word), {lang: "en-US"}));
+  try {
+    const r = await fetch("https://api.dictionaryapi.dev/api/v2/entries/en/" + word);
+    const d = (await r.json())[0];
+    const m = d.meanings[0];
+    box.textContent = `${d.word} ${d.phonetic || ""} (${m.partOfSpeech}): ${m.definitions[0].definition}`;
+  } catch { box.textContent = word + ": không tìm thấy"; }
+}
+if("serviceWorker" in navigator)navigator.serviceWorker.register("/sw.js");
+</script>
