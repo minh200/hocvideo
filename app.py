@@ -48,7 +48,12 @@ def process():
     tmp = f"tmp_{vid}"
     shutil.rmtree(tmp, ignore_errors=True); os.makedirs(tmp)
     try:
-        subprocess.run(["yt-dlp", "-x", "-f", "bestaudio", "-o", f"{tmp}/raw.%(ext)s", url], check=True)
+        cmd = ["yt-dlp", "-x", "-f", "bestaudio", "-o", f"{tmp}/raw.%(ext)s"]
+        ck = "/etc/secrets/cookies.txt"
+        if os.path.exists(ck):
+            shutil.copy(ck, "/tmp/cookies.txt"); cmd += ["--cookies", "/tmp/cookies.txt"]
+        r = subprocess.run(cmd + [url], capture_output=True, text=True)
+        if r.returncode: raise RuntimeError(r.stderr[-300:])
         raw = glob.glob(f"{tmp}/raw.*")[0]
         subprocess.run(["ffmpeg", "-y", "-i", raw, "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k",
                         "-f", "segment", "-segment_time", str(CHUNK), f"{tmp}/part_%03d.mp3"], check=True)
