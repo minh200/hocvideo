@@ -35,6 +35,11 @@ async function go() {
   st.textContent = "Đang xử lý (có thể vài phút)...";
   try {
     let d;
+    const mm = u.value.match(/(?:v=|youtu\.be\/|shorts\/)([\w-]{11})/);
+    if (mm && apiReady) {
+      if (player) player.loadVideoById(mm[1]);
+      else player = new YT.Player("p", {videoId: mm[1], playerVars: {playsinline: 1}});
+    }
     while (true) {
       try {
         const r = await fetch("/api/process?url=" + encodeURIComponent(u.value));
@@ -46,8 +51,7 @@ async function go() {
     if (d.error) { st.textContent = d.error; return; }
     segs = d.segs; st.textContent = "";
     render();
-    if (player) player.loadVideoById(d.vid);
-    else player = new YT.Player("p", {videoId: d.vid, playerVars: {playsinline: 1}});
+    if (!player) player = new YT.Player("p", {videoId: d.vid, playerVars: {playsinline: 1}});
   } catch (e) { st.textContent = "Lỗi: " + e; }
 }
 
