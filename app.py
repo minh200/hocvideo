@@ -1,10 +1,11 @@
-import os, re, glob, json, time, shutil, subprocess, requests
+import os, re, glob, json, time, shutil, subprocess, requests, threading
 from flask import Flask, request, jsonify, send_file
 
-H = {"Authorization": f"Bearer {os.environ['GROQ_API_KEY']}"}
+H = {"Authorization": f"Bearer {os.environ.get('GROQ_API_KEY', '')}"}
 app = Flask(__name__)
 os.makedirs("cache", exist_ok=True)
 CHUNK = 600
+jobs = {}
 
 def post(url, **kw):
     for _ in range(5):
@@ -30,21 +31,7 @@ def translate(batch, lang):
         if m: out[int(m[1])] = m[2].strip()
     return [out.get(n, batch[n-1][2]) for n in range(1, len(batch)+1)]
 
-@app.route("/")
-def index():
-    return send_file("index.html")
-
-@app.route("/api/process")
-def process():
-    url = request.args["url"]
-    lang = request.args.get("lang", "Vietnamese")
-    m = re.search(r"(?:v=|youtu\.be/|shorts/)([\w-]{11})", url)
-    if not m:
-        return jsonify(error="Link YouTube không hợp lệ"), 400
-    vid = m[1]
-    cf = f"cache/{vid}_{lang}.json"
-    if os.path.exists(cf):
-        return jsonify(vid=vid, segs=json.load(open(cf, encoding="utf-8")))
+def work(url, lang, vid, cf, key):
     tmp = f"tmp_{vid}"
     shutil.rmtree(tmp, ignore_errors=True); os.makedirs(tmp)
     try:
@@ -53,10 +40,12 @@ def process():
         if os.path.exists(ck):
             shutil.copy(ck, "/tmp/cookies.txt"); cmd += ["--cookies", "/tmp/cookies.txt"]
         r = subprocess.run(cmd + [url], capture_output=True, text=True)
-        if r.returncode: raise RuntimeError(r.stderr[-300:])
+        if r.returncode:
+            raise RuntimeError(r.stderr[-300:])
         raw = glob.glob(f"{tmp}/raw.*")[0]
         subprocess.run(["ffmpeg", "-y", "-i", raw, "-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k",
-                        "-f", "segment", "-segment_time", str(CHUNK), f"{tmp}/part_%03d.mp3"], check=True)
+                        "-f", "segment", "-segment_time", str(CHUNK), f"{tmp}/part_%03d.mp3"],
+                       check=True, capture_output=True)
         segs = []
         for i, p in enumerate(sorted(glob.glob(f"{tmp}/part_*.mp3"))):
             with open(p, "rb") as f:
@@ -69,12 +58,34 @@ def process():
             vi += translate(segs[k:k+30], lang)
         res = [{"s": a, "e": b, "t": t, "v": v} for (a, b, t), v in zip(segs, vi)]
         json.dump(res, open(cf, "w", encoding="utf-8"), ensure_ascii=False)
-        return jsonify(vid=vid, segs=res)
+        jobs[key] = {"status": "done", "vid": vid, "segs": res}
     except Exception as ex:
-        return jsonify(error=str(ex)), 500
+        jobs[key] = {"status": "error", "error": str(ex)}
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
+@app.route("/")
+def index():
+    return send_file("index.html")
+
+@app.route("/api/process")
+def process():
+    url = request.args["url"]
+    lang = request.args.get("lang", "Vietnamese")
+    m = re.search(r"(?:v=|youtu\.be/|shorts/)([\w-]{11})", url)
+    if not m:
+        return jsonify(status="error", error="Link YouTube không hợp lệ")
+    vid = m[1]
+    cf = f"cache/{vid}_{lang}.json"
+    if os.path.exists(cf):
+        return jsonify(status="done", vid=vid, segs=json.load(open(cf, encoding="utf-8")))
+    key = vid + lang
+    j = jobs.get(key)
+    if j is None or j["status"] == "error":
+        jobs[key] = {"status": "running"}
+        threading.Thread(target=work, args=(url, lang, vid, cf, key), daemon=True).start()
+        return jsonify(status="running")
+    return jsonify(j)
 
 @app.route("/manifest.json")
 @app.route("/sw.js")
